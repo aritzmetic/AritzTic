@@ -16,7 +16,8 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)  # correct https:// l
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret")
 app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024
-PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")  # CHANGE THIS
+PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123").strip()  # CHANGE THIS (set it in Vercel env vars)
+print("[aritztic] ADMIN_PASSWORD from env:", "ADMIN_PASSWORD" in os.environ, "| length:", len(PASSWORD))
 DEFAULT_PROFILE = {
     "name": "Your Name", "roles": ["web experiences", "interactive apps", "bold brands"],
     "tagline": "Art, but make it Aritz. Developer and designer turning ideas into memorable products.",
@@ -79,7 +80,8 @@ def view_page(token):
 # ---------- host auth ----------
 @app.post("/api/login")
 def login():
-    if secrets.compare_digest((request.json or {}).get("password", ""), PASSWORD):
+    given = str((request.get_json(silent=True) or {}).get("password", "")).strip()
+    if secrets.compare_digest(given.encode(), PASSWORD.encode()):  # bytes: works with any characters
         session["host"] = True
         return jsonify(ok=True)
     return jsonify(error="wrong password"), 401
