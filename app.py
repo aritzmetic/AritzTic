@@ -7,6 +7,7 @@ import os, json, secrets, time
 from functools import wraps
 from flask import Flask, request, jsonify, session, send_from_directory, abort
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.exceptions import HTTPException
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -67,6 +68,16 @@ def host_only(f):
             return jsonify(error="login required"), 401
         return f(*a, **k)
     return w
+
+# ---------- errors: show the real reason to the host ----------
+@app.errorhandler(Exception)
+def on_error(e):
+    code = e.code if isinstance(e, HTTPException) else 500
+    print("[aritztic] error:", repr(e))
+    if not request.path.startswith("/api/"):
+        return ("Not found" if code == 404 else "Server error. Check the Vercel logs."), code
+    msg = f"{type(e).__name__}: {e}" if session.get("host") else "Request failed"
+    return jsonify(error=msg[:500]), code
 
 # ---------- pages ----------
 @app.get("/")

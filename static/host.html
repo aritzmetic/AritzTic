@@ -20,9 +20,11 @@
 const dl=$('#dl'),app=$('#app');let tab='projects',P=[],L=[],M=[],prof={};
 dl.onclick=e=>{if(e.target===dl)dl.close()};
 const D=document;fx();
-async function boot(){try{await api('/api/me');await loadAll();shell()}catch{loginView()}}
+async function boot(){
+ try{await api('/api/me')}catch{return loginView()}
+ try{await loadAll();shell()}catch(e){app.innerHTML=`<div class="login"><div style="max-width:600px;padding:20px;text-align:center"><h2>You're in, but the database didn't answer</h2><p style="color:var(--mu);word-break:break-word;margin-bottom:18px">${esc(e.message)}</p><button class="btn" onclick="boot()">Retry</button> <button class="btn ghost" onclick="api('/api/logout','POST').then(boot)">Log out</button></div></div>`}}
 function loginView(){app.innerHTML=`<div class="login"><form id="lf"><h2 style="margin:0">Backstage pass</h2><p style="color:var(--mu)">Only the artist gets in. (That's you.)</p><input id="pw" type="password" placeholder="Password" required autofocus><button class="btn mag">Log in</button></form></div>`;
- $('#lf').onsubmit=async e=>{e.preventDefault();try{await api('/api/login','POST',{password:$('#pw').value});boot()}catch{toast('Wrong password')}}}
+ $('#lf').onsubmit=async e=>{e.preventDefault();try{await api('/api/login','POST',{password:$('#pw').value});boot()}catch(er){toast(er.message)}}}
 async function loadAll(){[P,L,M,prof]=await Promise.all([api('/api/projects'),api('/api/links'),api('/api/messages'),api('/api/profile')])}
 function shell(){
  app.innerHTML=`<header class="top"><b><i>◉</i> Aritztic <small style="color:var(--mu);font:400 12px var(--b)">· backstage</small></b><div class="tabs">${['projects','links','messages','profile'].map(t=>`<button class="chip ${t===tab?'on':''}" data-tab="${t}">${t[0].toUpperCase()+t.slice(1)}${t==='messages'&&M.length?` (${M.length})`:''}</button>`).join('')}</div>
