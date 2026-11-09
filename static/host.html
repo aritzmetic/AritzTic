@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Aritztic · Backstage</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;800&family=Hanken+Grotesk:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.top{position:sticky;top:0;z-index:40;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:14px clamp(16px,4vw,40px);background:#0a0a0acc;backdrop-filter:blur(14px);border-bottom:1px solid var(--ln)}
+.top b{font:800 15px var(--d)}.top b i{color:var(--o);font-style:normal}.tabs{display:flex;gap:6px;flex-wrap:wrap}.tabs .chip{padding:7px 16px}
+.wrap{position:relative;z-index:1;max-width:1200px;margin:auto;padding:28px clamp(16px,4vw,40px) 80px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:26px}.kpi{background:var(--pn);border:1px solid var(--ln);border-radius:16px;padding:16px;transition:border-color .3s,transform .3s}.kpi:hover{border-color:var(--o);transform:translateY(-4px)}
+.kpi b{display:block;font:800 30px var(--d);color:var(--o)}.kpi small{color:var(--mu)}
+.bar{height:8px;border-radius:9px;background:var(--ln);overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--o),var(--o2));transition:width 1s}
+.panel{background:var(--pn);border:1px solid var(--ln);border-radius:16px;padding:18px;margin-bottom:12px;display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap}
+.panel .u{font:13px monospace;color:var(--o2);word-break:break-all}.panel.off{opacity:.5}
+.adm{display:flex;gap:6px;margin-top:14px}.login{position:relative;z-index:1;min-height:100vh;display:grid;place-items:center}.login form{width:min(380px,90vw);display:grid;gap:14px;text-align:center}
+.hint{background:#ff6a0014;border:1px dashed var(--o);border-radius:14px;padding:14px;margin-bottom:22px;color:var(--mu);font-size:14px}
+</style></head><body>
+<div id="app"></div><dialog id="dl"></dialog>
+<script src="/static/fx.js"></script>
+<script>
+const dl=$('#dl'),app=$('#app');let tab='projects',P=[],L=[],M=[],prof={};
+dl.onclick=e=>{if(e.target===dl)dl.close()};
+const D=document;fx();
+async function boot(){try{await api('/api/me');await loadAll();shell()}catch{loginView()}}
+function loginView(){app.innerHTML=`<div class="login"><form id="lf"><h2 style="margin:0">Backstage pass</h2><p style="color:var(--mu)">Only the artist gets in. (That's you.)</p><input id="pw" type="password" placeholder="Password" required autofocus><button class="btn mag">Log in</button></form></div>`;
+ $('#lf').onsubmit=async e=>{e.preventDefault();try{await api('/api/login','POST',{password:$('#pw').value});boot()}catch{toast('Wrong password')}}}
+async function loadAll(){[P,L,M,prof]=await Promise.all([api('/api/projects'),api('/api/links'),api('/api/messages'),api('/api/profile')])}
+function shell(){
+ app.innerHTML=`<header class="top"><b><i>◉</i> Aritztic <small style="color:var(--mu);font:400 12px var(--b)">· backstage</small></b><div class="tabs">${['projects','links','messages','profile'].map(t=>`<button class="chip ${t===tab?'on':''}" data-tab="${t}">${t[0].toUpperCase()+t.slice(1)}${t==='messages'&&M.length?` (${M.length})`:''}</button>`).join('')}</div>
+ <div style="display:flex;gap:8px"><button class="btn sm mag" id="mk">🔗 Create user-view link</button><button class="btn sm ghost" id="lo">Log out</button></div></header><div class="wrap" id="main"></div>`;
+ $$('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;shell()});$('#mk').onclick=makeLink;
+ $('#lo').onclick=async()=>{await api('/api/logout','POST');boot()};view();
+}
+function view(){const m=$('#main');({projects:vProjects,links:vLinks,messages:vMessages,profile:vProfile})[tab](m);reveal()}
+function vProjects(m){
+ const tv=P.reduce((a,b)=>a+b.views,0),tl=P.reduce((a,b)=>a+b.likes,0),lv=L.reduce((a,b)=>a+b.views,0),mx=Math.max(1,...P.map(p=>p.views));
+ m.innerHTML=`<div class="kpis"><div class="kpi"><b>${P.length}</b><small>Projects</small></div><div class="kpi"><b>${lv}</b><small>Link visits</small></div><div class="kpi"><b>${tv}</b><small>Project views</small></div><div class="kpi"><b>${tl}</b><small>Likes</small></div><div class="kpi"><b>${M.length}</b><small>Messages</small></div></div>
+ ${P.length?`<h2 style="font-size:24px">Top projects</h2>${[...P].sort((a,b)=>b.views-a.views).slice(0,4).map(p=>`<div style="margin-bottom:10px"><small>${esc(p.title)} · ${p.views} views · ${p.likes} likes</small><div class="bar"><i style="width:${p.views/mx*100}%"></i></div></div>`).join('')}`:''}
+ <div style="display:flex;justify-content:space-between;align-items:center;margin:28px 0 18px"><h2 style="margin:0;font-size:28px">Your projects</h2><button class="btn sm" id="add">+ Add project</button></div>
+ <div id="grid">${P.length?P.map(p=>card(p,`<div class="adm"><button class="btn sm ghost" data-e="${p.id}">Edit</button><button class="btn sm red" data-d="${p.id}">Delete</button></div>`)).join(''):'<div class="empty">A blank canvas. Click “Add project” to hang your first piece.</div>'}</div>`;
+ $('#add').onclick=()=>form();
+ $('#grid').onclick=async e=>{const ed=e.target.dataset.e,de=e.target.dataset.d;if(ed)form(P.find(p=>p.id==ed));
+  if(de&&confirm('Delete this project?')){await api('/api/projects/'+de,'DELETE');await loadAll();shell();toast('Project deleted')}};
+}
+function form(p={images:[],tags:[]}){
+ let imgs=[...p.images];
+ dl.innerHTML=`<h3>${p.id?'Edit':'Add'} project</h3><form id="pf" class="fl"><label>Title<input id="f1" required value="${esc(p.title)}"></label><label>Description<textarea id="f2" rows="3">${esc(p.description)}</textarea></label>
+ <label>Tags (comma separated)<input id="f3" value="${esc(p.tags.join(', '))}"></label><label>Live link<input id="f4" type="url" value="${esc(p.live)}"></label><label>Source link<input id="f5" type="url" value="${esc(p.repo)}"></label>
+ <label>Upload images (auto-compressed, max 5)<input id="f6" type="file" accept="image/*" multiple></label><div class="row" style="margin:0"><input id="f7" placeholder="…or paste an image URL" style="flex:1"><button type="button" class="btn sm ghost" id="au">Add URL</button></div><div id="th" class="gal"></div>
+ <label style="display:flex;gap:8px;align-items:center;flex-direction:row"><input id="f8" type="checkbox" style="width:auto" ${p.featured?'checked':''}> Feature this project</label>
+ <div class="row"><button class="btn sm">Save project</button><button type="button" class="btn sm ghost" id="x">Cancel</button></div></form>`;
+ const th=()=>{$('#th').innerHTML=imgs.map((s,i)=>`<span class="th"><img src="${esc(safe(s))}" alt=""><button type="button" data-r="${i}">×</button></span>`).join('');$$('[data-r]').forEach(b=>b.onclick=()=>{imgs.splice(+b.dataset.r,1);th()})};th();
+ $('#f6').onchange=async e=>{for(const f of e.target.files){if(imgs.length<5)imgs.push(await shrink(f))}th()};
+ $('#au').onclick=()=>{const v=$('#f7').value.trim();if(/^https?:\/\//.test(v)){imgs.push(v);$('#f7').value='';th()}};$('#x').onclick=()=>dl.close();
+ $('#pf').onsubmit=async e=>{e.preventDefault();const b={title:$('#f1').value,description:$('#f2').value,tags:$('#f3').value.split(','),live:$('#f4').value,repo:$('#f5').value,images:imgs,featured:$('#f8').checked};
+  await api(p.id?'/api/projects/'+p.id:'/api/projects',p.id?'PUT':'POST',b);dl.close();await loadAll();shell();toast('Project saved')};dl.showModal();
+}
+function vLinks(m){
+ m.innerHTML=`<div class="hint">Visitors can only see your portfolio through a link you generate here. They never see the dashboard, edit buttons or other links. Turn a link off any time to stop access.</div>
+ <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px"><h2 style="margin:0;font-size:28px">User-view links</h2><button class="btn sm" id="mk2">🔗 Create link</button></div>
+ ${L.length?L.map(l=>{const u=location.origin+'/v/'+l.token;return `<div class="panel rv ${l.active?'':'off'}"><div><b>${esc(l.label)}</b> <small style="color:var(--mu)">· ${l.views} visits · ${new Date(l.created*1000).toLocaleDateString()}</small><div class="u">${u}</div></div>
+ <div class="adm" style="margin:0"><button class="btn sm" data-c="${u}">Copy</button><a class="btn sm ghost" target="_blank" href="${u}">Preview</a><button class="btn sm ghost" data-t="${l.token}">${l.active?'Turn off':'Turn on'}</button><button class="btn sm red" data-x="${l.token}">Delete</button></div></div>`}).join(''):'<div class="empty">No links yet. Create one to share your portfolio.</div>'}`;
+ $('#mk2').onclick=makeLink;
+ m.onclick=async e=>{const d=e.target.dataset;if(d.c){navigator.clipboard.writeText(d.c);toast('Link copied')}
+  if(d.t){await api(`/api/links/${d.t}/toggle`,'POST');await loadAll();view()}if(d.x&&confirm('Delete this link? It will stop working.')){await api('/api/links/'+d.x,'DELETE');await loadAll();view()}};
+}
+function makeLink(){
+ dl.innerHTML=`<h3>Create user-view link</h3><form id="lf2" class="fl"><label>Who is this link for? (only you see this label)<input id="lb" placeholder="e.g. Acme recruiter, LinkedIn, Client A"></label><div class="row"><button class="btn sm">Generate link</button><button type="button" class="btn sm ghost" id="x">Cancel</button></div></form>`;
+ $('#x').onclick=()=>dl.close();
+ $('#lf2').onsubmit=async e=>{e.preventDefault();const r=await api('/api/links','POST',{label:$('#lb').value});await loadAll();
+  dl.innerHTML=`<h3>Your link is ready</h3><div class="panel"><span class="u">${r.url}</span></div><div class="row"><button class="btn sm" id="cp">Copy link</button><a class="btn sm ghost" target="_blank" href="${r.url}">Open user view</a><button class="btn sm ghost" id="x2">Done</button></div>`;
+  $('#cp').onclick=()=>{navigator.clipboard.writeText(r.url);toast('Link copied')};$('#x2').onclick=()=>{dl.close();tab='links';shell()}};dl.showModal();
+}
+function vMessages(m){
+ m.innerHTML=`<h2 style="font-size:28px">Messages from visitors</h2>${M.length?M.map(x=>`<div class="panel rv"><div><b>${esc(x.name)}</b> <a href="mailto:${esc(x.email)}" style="color:var(--o2)">${esc(x.email)}</a> <small style="color:var(--mu)">· ${new Date(x.created*1000).toLocaleString()}</small><p style="color:var(--mu);white-space:pre-line;margin-top:6px">${esc(x.msg)}</p></div><button class="btn sm red" data-m="${x.id}">Delete</button></div>`).join(''):'<div class="empty">No messages yet.</div>'}`;
+ m.onclick=async e=>{const id=e.target.dataset.m;if(id){await api('/api/messages/'+id,'DELETE');await loadAll();shell()}};
+}
+function vProfile(m){
+ m.innerHTML=`<h2 style="font-size:28px">Profile shown to visitors</h2><form id="pr" class="fl" style="max-width:640px"><label>Name<input id="a1" value="${esc(prof.name)}"></label><label>Typing roles (comma separated)<input id="a2" value="${esc(prof.roles.join(', '))}"></label>
+ <label>Tagline<input id="a3" value="${esc(prof.tagline)}"></label><label>About<textarea id="a4" rows="5">${esc(prof.about)}</textarea></label><label>Email<input id="a5" value="${esc(prof.email)}"></label><label>GitHub URL<input id="a6" value="${esc(prof.github)}"></label><label>LinkedIn URL<input id="a7" value="${esc(prof.linkedin)}"></label><button class="btn sm" style="justify-self:start">Save profile</button></form>`;
+ $('#pr').onsubmit=async e=>{e.preventDefault();await api('/api/profile','POST',{name:$('#a1').value,roles:$('#a2').value,tagline:$('#a3').value,about:$('#a4').value,email:$('#a5').value,github:$('#a6').value,linkedin:$('#a7').value});await loadAll();toast('Profile saved')};
+}
+boot();
+</script></body></html>

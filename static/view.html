@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Aritztic</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;800&family=Hanken+Grotesk:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.nav{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;justify-content:space-between;align-items:center;padding:18px clamp(18px,5vw,56px);backdrop-filter:blur(14px);background:#07070799}
+.logo{font:800 15px var(--d)}.nav nav{display:flex;gap:26px}.nav nav a{color:var(--mu)}.nav nav a:hover{color:var(--o)}
+section{padding:100px clamp(18px,5vw,56px);max-width:1280px;margin:auto}
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding-top:130px}
+.hero h1{font:800 clamp(44px,10vw,140px)/.95 var(--d);letter-spacing:-.04em;max-width:11ch;animation:rise 1s both}
+.hero h1 span{display:inline-block;transition:transform .3s,color .3s}.hero h1 span:hover{color:var(--o);transform:translateY(-10px) rotate(-4deg)}
+.role{font:500 clamp(20px,3vw,32px) var(--d);margin:26px 0 10px}.role b{color:var(--o)}.caret{display:inline-block;width:3px;height:1em;background:var(--o);margin-left:4px;vertical-align:-.12em;animation:bl 1s steps(1) infinite}
+#ht{color:var(--mu);max-width:52ch}.cta{display:flex;gap:14px;margin-top:32px;flex-wrap:wrap}
+@keyframes rise{from{opacity:0;transform:translateY(40px)}}@keyframes bl{50%{opacity:0}}
+.marquee{overflow:hidden;border-block:1px solid var(--ln);background:#0b0b0bcc;padding:18px 0}
+#mq{display:flex;gap:48px;width:max-content;animation:mq 30s linear infinite;font:800 clamp(20px,3vw,32px) var(--d);color:transparent;-webkit-text-stroke:1px var(--o)}#mq span:nth-child(3n){color:var(--o);-webkit-text-stroke:0}@keyframes mq{to{transform:translateX(-50%)}}
+.tools{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:22px}#q{max-width:260px}#flt{display:flex;gap:8px;flex-wrap:wrap}
+.about{display:grid;grid-template-columns:1.4fr 1fr;gap:50px;align-items:center}@media(max-width:800px){.about{grid-template-columns:1fr}}
+.about p{color:var(--mu);font-size:18px;max-width:60ch;white-space:pre-line}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.stat{border:1px solid var(--ln);border-radius:18px;padding:22px 8px;text-align:center;background:var(--pn)}.stat b{display:block;font:800 clamp(28px,4vw,48px) var(--d);color:var(--o)}.stat small{color:var(--mu)}
+.contact{text-align:center}.soc{display:flex;justify-content:center;gap:22px;margin-top:28px;color:var(--mu)}.soc a:hover{color:var(--o)}
+footer{text-align:center;color:var(--mu);padding:30px;border-top:1px solid var(--ln);font-size:14px}.gone{display:grid;place-items:center;height:100vh;text-align:center;padding:20px}
+#lk.liked{background:var(--o);color:#000}
+</style></head><body>
+<header class="nav"><a class="logo" href="#top" id="lg"></a><nav><a href="#work">Work</a><a href="#about">About</a><a href="#contact">Contact</a></nav></header>
+<main>
+<section class="hero" id="top"><h1 id="hn"></h1><p class="role">I build <b id="ty"></b><i class="caret"></i></p><p id="ht"></p>
+<div class="cta"><a class="btn mag" href="#work">See my work</a><a class="btn ghost mag" href="#contact">Start a project</a></div></section>
+<div class="marquee"><div id="mq"></div></div>
+<section id="work"><h2>Selected work</h2><div class="tools"><input id="q" placeholder="Search projects…" aria-label="Search"><div id="flt"></div></div><div id="grid"></div></section>
+<section id="about" class="about"><div><h2>About me</h2><p id="ab"></p></div>
+<div class="stats"><div class="stat"><b data-k="p">0</b><small>Projects</small></div><div class="stat"><b data-k="t">0</b><small>Technologies</small></div><div class="stat"><b data-k="l">0</b><small>Total likes</small></div></div></section>
+<section id="contact" class="contact"><h2>Have an idea? Let's build it.</h2>
+<form id="cf" class="fl" style="max-width:520px;margin:auto;text-align:left"><input id="cn" placeholder="Your name" required><input id="ce" type="email" placeholder="Your email" required><textarea id="cm" rows="4" placeholder="Tell me about your project" required></textarea><button class="btn mag">Send message</button></form>
+<div class="soc" id="soc"></div></section>
+</main><footer>© <span id="yr"></span> <span id="fn"></span></footer><dialog id="dl"></dialog>
+<script src="/static/fx.js"></script>
+<script>
+const T=location.pathname.split('/').pop(),dl=$('#dl');let D,filter='All',q='';
+const liked=()=>JSON.parse(localStorage.getItem('liked')||'[]');
+(async()=>{fx();
+ try{D=await api('/api/public/'+T)}catch{document.body.innerHTML='<div class="gone"><div><h1 style="font-family:var(--d)">This link has left the building</h1><p style="color:var(--mu)">It was switched off or never existed. Ask the owner for a fresh one.</p></div></div>';return}
+ const p=D.profile;document.title=p.name+' · Aritztic';$('#lg').innerHTML='Aritz<span style="color:var(--o)">tic</span>';$('#fn').textContent=p.name+' · crafted with Aritztic';$('#yr').textContent=new Date().getFullYear();
+ $('#hn').innerHTML=esc(p.name).split(' ').map(w=>`<span>${w}</span>`).join(' ');$('#ht').textContent=p.tagline;$('#ab').textContent=p.about;
+ $('#soc').innerHTML=[['Email','mailto:'+p.email],['GitHub',p.github],['LinkedIn',p.linkedin]].filter(x=>x[1]&&x[1]!=='mailto:').map(x=>`<a href="${esc(x[1])}" target="_blank" rel="noopener">${x[0]}</a>`).join('');
+ typeLoop($('#ty'),()=>p.roles.length?p.roles:['things']);render();
+})();
+function render(){
+ const tags=[...new Set(D.projects.flatMap(p=>p.tags))];
+ $('#flt').innerHTML=['All',...tags].map(t=>`<button class="chip ${t===filter?'on':''}" data-t="${esc(t)}">${esc(t)}</button>`).join('');
+ const list=D.projects.filter(p=>(filter==='All'||p.tags.includes(filter))&&(p.title+p.description+p.tags.join(' ')).toLowerCase().includes(q));
+ $('#grid').innerHTML=list.length?list.map(p=>card(p)).join(''):'<div class="empty">Nothing on the walls here. Try another search.</div>';
+ const base=tags.length?tags:['Design','Code','Motion'];$('#mq').innerHTML=[...base,...base].flatMap(t=>[t,t]).map(t=>`<span>${esc(t)}</span>`).join('');
+ const d={p:D.projects.length,t:tags.length,l:D.projects.reduce((a,b)=>a+b.likes,0)};$$('.stat b').forEach(b=>count(b,d[b.dataset.k]));reveal();
+}
+const ev=(id,type)=>api(`/api/public/${T}/event`,'POST',{id,type}).catch(()=>{});
+function open(p){
+ ev(p.id,'view');p.views++;const im=p.images;
+ dl.innerHTML=`<h3>${esc(p.title)}</h3>${im[0]?`<img class="bigimg" id="bi" src="${esc(safe(im[0]))}" alt="">`:''}${im.length>1?`<div class="gal">${im.map(s=>`<img src="${esc(safe(s))}" alt="">`).join('')}</div>`:''}
+ <p style="color:var(--mu);margin:12px 0;white-space:pre-line">${esc(p.description)}</p><div class="tags">${p.tags.map(t=>`<span>${esc(t)}</span>`).join('')}</div>
+ <div class="row">${p.live?`<a class="btn sm" target="_blank" rel="noopener" href="${esc(safe(p.live))}">Live demo</a>`:''}${p.repo?`<a class="btn sm ghost" target="_blank" rel="noopener" href="${esc(safe(p.repo))}">Source code</a>`:''}
+ <button class="btn sm ghost ${liked().includes(p.id)?'liked':''}" id="lk">♥ <span>${p.likes}</span></button><button class="btn sm ghost" id="x">Close</button></div>`;
+ dl.showModal();$('#x').onclick=()=>dl.close();$$('.gal img').forEach(g=>g.onclick=()=>$('#bi').src=g.src);
+ $('#lk').onclick=()=>{if(liked().includes(p.id))return toast('You already liked this');localStorage.setItem('liked',JSON.stringify([...liked(),p.id]));p.likes++;ev(p.id,'like');$('#lk').classList.add('liked');$('#lk span').textContent=p.likes;render()};
+}
+dl.onclick=e=>{if(e.target===dl)dl.close()};
+$('#q').oninput=e=>{q=e.target.value.toLowerCase();render()};$('#flt').onclick=e=>{if(e.target.dataset.t){filter=e.target.dataset.t;render()}};
+$('#grid').onclick=e=>{const c=e.target.closest('.card');if(c)open(D.projects.find(p=>p.id==c.dataset.id))};
+$('#grid').onkeydown=e=>{if(e.key==='Enter'&&e.target.classList.contains('card'))e.target.click()};
+$('#cf').onsubmit=async e=>{e.preventDefault();try{await api(`/api/public/${T}/contact`,'POST',{name:$('#cn').value,email:$('#ce').value,msg:$('#cm').value});e.target.reset();toast('Message sent. Thank you!')}catch{toast('Could not send. Try again.')}};
+</script></body></html>
