@@ -88,6 +88,19 @@ def host_page():
 def view_page(token):
     return send_from_directory("static", "view.html")
 
+# ---------- diagnostics (safe: no secrets; you can delete this route later) ----------
+@app.get("/api/health")
+def health():
+    info = {"admin_password_env_set": "ADMIN_PASSWORD" in os.environ,
+            "secret_key_env_set": "SECRET_KEY" in os.environ,
+            "firebase_env_set": "FIREBASE_SERVICE_ACCOUNT" in os.environ}
+    try:
+        next(iter(fs.collection("projects").limit(1).stream()), None)
+        info["firestore"] = "ok"
+    except Exception as e:
+        info["firestore"] = f"{type(e).__name__}: {str(e)[:300]}"
+    return jsonify(info)
+
 # ---------- host auth ----------
 @app.post("/api/login")
 def login():
