@@ -1,15 +1,14 @@
-"""Aritztic: portfolio backend (Flask + Firebase Firestore).
+"""Aritztic: portfolio backend (Flask + Firebase Firestore over plain HTTPS/REST).
 Run:  pip install -r requirements.txt  ->  python app.py  ->  http://localhost:5000
 Host (you):  /            (password login)
 Visitors:    /v/<token>  (links you generate from the host dashboard)
 """
 import os, json, secrets, time
+from urllib.parse import quote
 from functools import wraps
 from flask import Flask, request, jsonify, session, send_from_directory, abort
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import HTTPException
-import firebase_admin
-from firebase_admin import credentials, firestore
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -18,7 +17,6 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret")
 app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123").strip()  # CHANGE THIS (set it in Vercel env vars)
-print("[aritztic] ADMIN_PASSWORD from env:", "ADMIN_PASSWORD" in os.environ, "| length:", len(PASSWORD))
 DEFAULT_PROFILE = {
     "name": "Your Name", "roles": ["web experiences", "interactive apps", "bold brands"],
     "tagline": "Art, but make it Aritz. Developer and designer turning ideas into memorable products.",
@@ -26,32 +24,105 @@ DEFAULT_PROFILE = {
     "email": "you@email.com", "github": "", "linkedin": "",
 }
 
-# ---------- Firebase ----------
-def init_firebase():
-    raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT")  # full JSON string (use this on Vercel)
-    key = os.path.join(BASE, "serviceAccountKey.json")  # or a local file (use this in VS Code)
-    if raw:
-        cred = credentials.Certificate(json.loads(raw.strip()))
-    elif os.path.exists(key):
-        cred = credentials.Certificate(key)
-    else:
-        raise SystemExit("Missing Firebase key: put serviceAccountKey.json next to app.py "
-                         "or set FIREBASE_SERVICE_ACCOUNT. See README.md.")
-    firebase_admin.initialize_app(cred)
-    return firestore.client()
+# ================= Firestore over REST (no gRPC, fast cold starts) =================
+_S = {}
 
-fs = init_firebase()
-DESC = firestore.Query.DESCENDING
+def _session():
+    """Created on first use, so a bad key shows up as a readable error instead of a crash."""
+    if not _S:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import AuthorizedSession
+        raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT")  # full JSON string (use this on Vercel)
+        key = os.path.join(BASE, "serviceAccountKey.json")  # or a local file (use this in VS Code)
+        if raw:
+            info = json.loads(raw.strip())
+        elif os.path.exists(key):
+            info = json.load(open(key, encoding="utf-8"))
+        else:
+            raise RuntimeError("Missing Firebase key: put serviceAccountKey.json next to app.py or set FIREBASE_SERVICE_ACCOUNT")
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/datastore"])
+        _S["project"] = info["project_id"]
+        _S["root"] = f"https://firestore.googleapis.com/v1/projects/{info['project_id']}/databases/(default)/documents"
+        _S["s"] = AuthorizedSession(creds, refresh_timeout=10)
+    return _S
 
-def pdict(doc):
-    d = doc.to_dict()
-    d["id"] = doc.id
-    d.setdefault("views", 0); d.setdefault("likes", 0)
+def enc(v):
+    if v is None: return {"nullValue": None}
+    if isinstance(v, bool): return {"booleanValue": v}
+    if isinstance(v, int): return {"integerValue": str(v)}
+    if isinstance(v, float): return {"doubleValue": v}
+    if isinstance(v, str): return {"stringValue": v}
+    if isinstance(v, (list, tuple)): return {"arrayValue": {"values": [enc(x) for x in v]}}
+    if isinstance(v, dict): return {"mapValue": {"fields": {k: enc(x) for k, x in v.items()}}}
+    raise TypeError(f"cannot store {type(v)}")
+
+def dec(v):
+    if "stringValue" in v: return v["stringValue"]
+    if "integerValue" in v: return int(v["integerValue"])
+    if "doubleValue" in v: return v["doubleValue"]
+    if "booleanValue" in v: return v["booleanValue"]
+    if "arrayValue" in v: return [dec(x) for x in v["arrayValue"].get("values", [])]
+    if "mapValue" in v: return {k: dec(x) for k, x in v["mapValue"].get("fields", {}).items()}
+    if "timestampValue" in v: return v["timestampValue"]
+    return None
+
+def _doc(d):
+    out = {k: dec(v) for k, v in d.get("fields", {}).items()}
+    out["_id"] = d["name"].rsplit("/", 1)[1]
+    return out
+
+def _call(method, url, **kw):
+    r = _session()["s"].request(method, url, timeout=(5, 10), **kw)
+    if r.status_code >= 400:
+        if r.status_code == 404 and method == "GET":
+            return None
+        raise RuntimeError(f"Firestore HTTP {r.status_code}: {r.text[:300]}")
+    return r.json() if r.text else {}
+
+def _path(col, doc_id): return f"{_session()['root']}/{col}/{quote(doc_id, safe='')}"
+
+def list_docs(col, limit=None):
+    q = {"from": [{"collectionId": col}], "orderBy": [{"field": {"fieldPath": "created"}, "direction": "DESCENDING"}]}
+    if limit: q["limit"] = limit
+    res = _call("POST", _session()["root"] + ":runQuery", json={"structuredQuery": q})
+    return [_doc(x["document"]) for x in res if "document" in x]
+
+def get_doc(col, doc_id):
+    d = _call("GET", _path(col, doc_id))
+    return _doc(d) if d else None
+
+def add_doc(col, data):
+    _call("POST", f"{_session()['root']}/{col}", json={"fields": {k: enc(v) for k, v in data.items()}})
+
+def set_doc(col, doc_id, data):  # create or fully replace
+    _call("PATCH", _path(col, doc_id), json={"fields": {k: enc(v) for k, v in data.items()}})
+
+def update_doc(col, doc_id, data):  # change some fields; the doc must exist
+    params = [("updateMask.fieldPaths", k) for k in data] + [("currentDocument.exists", "true")]
+    _call("PATCH", _path(col, doc_id), params=params, json={"fields": {k: enc(v) for k, v in data.items()}})
+
+def delete_doc(col, doc_id):
+    _call("DELETE", _path(col, doc_id))
+
+def incr(col, doc_id, field, n=1):  # atomic counter
+    s = _session()
+    name = f"projects/{s['project']}/databases/(default)/documents/{col}/{doc_id}"
+    _call("POST", s["root"].split("/documents")[0] + "/documents:commit", json={"writes": [{
+        "update": {"name": name}, "updateMask": {"fieldPaths": []},
+        "updateTransforms": [{"fieldPath": field, "increment": {"integerValue": str(n)}}],
+        "currentDocument": {"exists": True}}]})
+# ===================================================================================
+
+def pdict(d):
+    d["id"] = d.pop("_id")
+    d.setdefault("views", 0); d.setdefault("likes", 0); d.setdefault("tags", []); d.setdefault("images", [])
     return d
 
 def get_profile():
-    s = fs.collection("site").document("profile").get(timeout=20)
-    return {**DEFAULT_PROFILE, **(s.to_dict() if s.exists else {})}
+    d = get_doc("site", "profile") or {}
+    d.pop("_id", None)
+    return {**DEFAULT_PROFILE, **d}
 
 def clean_url(u):
     u = (u or "").strip()
@@ -79,15 +150,6 @@ def on_error(e):
     msg = f"{type(e).__name__}: {e}" if session.get("host") else "Request failed"
     return jsonify(error=msg[:500]), code
 
-# ---------- pages ----------
-@app.get("/")
-def host_page():
-    return send_from_directory("static", "host.html")
-
-@app.get("/v/<token>")
-def view_page(token):
-    return send_from_directory("static", "view.html")
-
 # ---------- diagnostics (safe: no secrets; you can delete this route later) ----------
 @app.get("/api/health")
 def health():
@@ -96,11 +158,21 @@ def health():
             "firebase_env_set": "FIREBASE_SERVICE_ACCOUNT" in os.environ}
     try:
         t0 = time.time()
-        next(iter(fs.collection("projects").limit(1).stream(timeout=20)), None)
+        info["project_id"] = _session()["project"]
+        list_docs("projects", 1)
         info["firestore"] = f"ok ({int((time.time() - t0) * 1000)} ms)"
     except Exception as e:
-        info["firestore"] = f"{type(e).__name__}: {str(e)[:300]}"
+        info["firestore"] = f"{type(e).__name__}: {str(e)[:400]}"
     return jsonify(info)
+
+# ---------- pages ----------
+@app.get("/")
+def host_page():
+    return send_from_directory("static", "host.html")
+
+@app.get("/v/<token>")
+def view_page(token):
+    return send_from_directory("static", "view.html")
 
 # ---------- host auth ----------
 @app.post("/api/login")
@@ -121,7 +193,7 @@ def logout():
 def me():
     return jsonify(ok=True)
 
-# ---------- host: projects ----------
+# ---------- host: dashboard + projects ----------
 def read_project():
     j = request.json or {}
     return {
@@ -136,44 +208,31 @@ def read_project():
 @app.get("/api/dashboard")
 @host_only
 def dashboard():
-    """Everything the host dashboard needs, in ONE request (one cold start instead of four)."""
-    def rows(col):
-        return list(fs.collection(col).order_by("created", direction=DESC).stream(timeout=20))
-    return jsonify(projects=[pdict(d) for d in rows("projects")],
-                   links=[{**d.to_dict(), "token": d.id} for d in rows("links")],
-                   messages=[{**d.to_dict(), "id": d.id} for d in rows("messages")],
-                   profile=get_profile())
-
-@app.get("/api/projects")
-@host_only
-def list_projects():
-    docs = fs.collection("projects").order_by("created", direction=DESC).stream()
-    return jsonify([pdict(d) for d in docs])
+    """Everything the host dashboard needs, in ONE request."""
+    links = [{**d, "token": d.pop("_id")} for d in list_docs("links")]
+    messages = [{**d, "id": d.pop("_id")} for d in list_docs("messages")]
+    return jsonify(projects=[pdict(d) for d in list_docs("projects")], links=links,
+                   messages=messages, profile=get_profile())
 
 @app.post("/api/projects")
 @host_only
 def add_project():
-    fs.collection("projects").add({**read_project(), "views": 0, "likes": 0, "created": time.time()})
+    add_doc("projects", {**read_project(), "views": 0, "likes": 0, "created": time.time()})
     return jsonify(ok=True)
 
 @app.put("/api/projects/<pid>")
 @host_only
 def edit_project(pid):
-    fs.collection("projects").document(pid).update(read_project())
+    update_doc("projects", pid, read_project())
     return jsonify(ok=True)
 
 @app.delete("/api/projects/<pid>")
 @host_only
 def del_project(pid):
-    fs.collection("projects").document(pid).delete()
+    delete_doc("projects", pid)
     return jsonify(ok=True)
 
 # ---------- host: profile, links, messages ----------
-@app.get("/api/profile")
-@host_only
-def read_profile():
-    return jsonify(get_profile())
-
 @app.post("/api/profile")
 @host_only
 def save_profile():
@@ -181,63 +240,48 @@ def save_profile():
     p = {k: j.get(k, DEFAULT_PROFILE[k]) for k in DEFAULT_PROFILE}
     if isinstance(p["roles"], str):
         p["roles"] = [r.strip() for r in p["roles"].split(",") if r.strip()]
-    fs.collection("site").document("profile").set(p)
+    set_doc("site", "profile", p)
     return jsonify(ok=True)
-
-@app.get("/api/links")
-@host_only
-def list_links():
-    docs = fs.collection("links").order_by("created", direction=DESC).stream()
-    return jsonify([{**d.to_dict(), "token": d.id} for d in docs])
 
 @app.post("/api/links")
 @host_only
 def create_link():
     token = secrets.token_urlsafe(8)
     label = ((request.json or {}).get("label") or "Visitor link").strip()[:60]
-    fs.collection("links").document(token).set({"label": label, "created": time.time(), "views": 0, "active": 1})
+    set_doc("links", token, {"label": label, "created": time.time(), "views": 0, "active": 1})
     return jsonify(token=token, url=request.host_url + "v/" + token)
 
 @app.post("/api/links/<token>/toggle")
 @host_only
 def toggle_link(token):
-    ref = fs.collection("links").document(token)
-    s = ref.get()
-    if s.exists:
-        ref.update({"active": 0 if s.to_dict().get("active") else 1})
+    d = get_doc("links", token)
+    if d:
+        update_doc("links", token, {"active": 0 if d.get("active") else 1})
     return jsonify(ok=True)
 
 @app.delete("/api/links/<token>")
 @host_only
 def del_link(token):
-    fs.collection("links").document(token).delete()
+    delete_doc("links", token)
     return jsonify(ok=True)
-
-@app.get("/api/messages")
-@host_only
-def list_messages():
-    docs = fs.collection("messages").order_by("created", direction=DESC).stream()
-    return jsonify([{**d.to_dict(), "id": d.id} for d in docs])
 
 @app.delete("/api/messages/<mid>")
 @host_only
 def del_message(mid):
-    fs.collection("messages").document(mid).delete()
+    delete_doc("messages", mid)
     return jsonify(ok=True)
 
 # ---------- visitors (token required, no login) ----------
 def valid_link(token):
-    ref = fs.collection("links").document(token)
-    s = ref.get()
-    if not s.exists or not s.to_dict().get("active"):
+    d = get_doc("links", token)
+    if not d or not d.get("active"):
         abort(404)
-    return ref
 
 @app.get("/api/public/<token>")
 def public_data(token):
-    valid_link(token).update({"views": firestore.Increment(1)})
-    docs = fs.collection("projects").order_by("created", direction=DESC).stream()
-    projects = sorted((pdict(d) for d in docs), key=lambda p: not p.get("featured"))  # featured first, stable
+    valid_link(token)
+    incr("links", token, "views")
+    projects = sorted((pdict(d) for d in list_docs("projects")), key=lambda p: not p.get("featured"))  # featured first
     return jsonify(profile=get_profile(), projects=projects)
 
 @app.post("/api/public/<token>/event")
@@ -247,7 +291,7 @@ def public_event(token):
     col = {"view": "views", "like": "likes"}.get(j.get("type"))
     if col and isinstance(j.get("id"), str):
         try:
-            fs.collection("projects").document(j["id"]).update({col: firestore.Increment(1)})
+            incr("projects", j["id"], col)
         except Exception:
             pass  # project was deleted
     return jsonify(ok=True)
@@ -258,8 +302,8 @@ def public_contact(token):
     j = request.json or {}
     if not (j.get("name") and j.get("email") and j.get("msg")):
         return jsonify(error="missing fields"), 400
-    fs.collection("messages").add({"name": j["name"][:80], "email": j["email"][:120],
-                                   "msg": j["msg"][:3000], "created": time.time()})
+    add_doc("messages", {"name": j["name"][:80], "email": j["email"][:120],
+                         "msg": j["msg"][:3000], "created": time.time()})
     return jsonify(ok=True)
 
 if __name__ == "__main__":
