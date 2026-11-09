@@ -50,7 +50,7 @@ def pdict(doc):
     return d
 
 def get_profile():
-    s = fs.collection("site").document("profile").get()
+    s = fs.collection("site").document("profile").get(timeout=20)
     return {**DEFAULT_PROFILE, **(s.to_dict() if s.exists else {})}
 
 def clean_url(u):
@@ -95,8 +95,9 @@ def health():
             "secret_key_env_set": "SECRET_KEY" in os.environ,
             "firebase_env_set": "FIREBASE_SERVICE_ACCOUNT" in os.environ}
     try:
-        next(iter(fs.collection("projects").limit(1).stream()), None)
-        info["firestore"] = "ok"
+        t0 = time.time()
+        next(iter(fs.collection("projects").limit(1).stream(timeout=20)), None)
+        info["firestore"] = f"ok ({int((time.time() - t0) * 1000)} ms)"
     except Exception as e:
         info["firestore"] = f"{type(e).__name__}: {str(e)[:300]}"
     return jsonify(info)
@@ -131,6 +132,17 @@ def read_project():
         "images": [clean_url(i) for i in j.get("images", []) if clean_url(i)][:5],
         "featured": bool(j.get("featured")),
     }
+
+@app.get("/api/dashboard")
+@host_only
+def dashboard():
+    """Everything the host dashboard needs, in ONE request (one cold start instead of four)."""
+    def rows(col):
+        return list(fs.collection(col).order_by("created", direction=DESC).stream(timeout=20))
+    return jsonify(projects=[pdict(d) for d in rows("projects")],
+                   links=[{**d.to_dict(), "token": d.id} for d in rows("links")],
+                   messages=[{**d.to_dict(), "id": d.id} for d in rows("messages")],
+                   profile=get_profile())
 
 @app.get("/api/projects")
 @host_only

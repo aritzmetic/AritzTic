@@ -3,7 +3,10 @@ const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safe=u=>/^(https?:\/\/|data:image\/)/i.test(u||'')?u:'#';
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2400)};
-const api=async(u,m='GET',b)=>{const f=b instanceof FormData;const r=await fetch(u,{method:m,headers:f||!b?{}:{'Content-Type':'application/json'},body:f?b:b&&JSON.stringify(b)});if(!r.ok){let m='Error '+r.status;try{m=(await r.json()).error||m}catch{}throw new Error(m)}return r.json()};
+const api=async(u,m='GET',b)=>{const f=b instanceof FormData,c=new AbortController(),t=setTimeout(()=>c.abort(),25000);
+ try{const r=await fetch(u,{method:m,signal:c.signal,headers:f||!b?{}:{'Content-Type':'application/json'},body:f?b:b&&JSON.stringify(b)});
+  if(!r.ok){let e='Error '+r.status;try{e=(await r.json()).error||e}catch{}throw new Error(e)}return await r.json()}
+ catch(e){if(e.name==='AbortError')throw new Error('Timed out after 25s waiting for '+u);throw e}finally{clearTimeout(t)}};
 const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.1});
 const reveal=()=>$$('.rv:not(.in)').forEach(e=>io.observe(e));
 const count=(el,to)=>{const s=+el.textContent,t0=performance.now();(function f(t){const k=Math.min(1,(t-t0)/900);el.textContent=Math.round(s+(to-s)*k);if(k<1)requestAnimationFrame(f)})(t0)};
