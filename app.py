@@ -1,22 +1,19 @@
 """Aritztic: portfolio backend (Flask + Firebase Firestore over plain HTTPS/REST).
 Run:  pip install -r requirements.txt  ->  python app.py  ->  http://localhost:5000
-Host (you):  /            (password login)
+Host (you):  /            (dashboard, no login)
 Visitors:    /v/<token>  (links you generate from the host dashboard)
 """
-import os, json, secrets, time
+import os, json, base64, secrets, time
 from urllib.parse import quote
 from functools import wraps
-from flask import Flask, request, jsonify, session, send_from_directory, abort
+from flask import Flask, request, jsonify, send_from_directory, abort
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import HTTPException
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)  # correct https:// links behind Vercel
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret")
 app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024
-PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123").strip()  # CHANGE THIS (set it in Vercel env vars)
 DEFAULT_PROFILE = {
     "name": "Your Name", "roles": ["web experiences", "interactive apps", "bold brands"],
     "tagline": "Art, but make it Aritz. Developer and designer turning ideas into memorable products.",
@@ -27,22 +24,36 @@ DEFAULT_PROFILE = {
 # ================= Firestore over REST (no gRPC, fast cold starts) =================
 _S = {}
 
+def _load_key():
+    """Find the service-account JSON: env var (raw JSON or base64), else local file. Repairs common paste damage."""
+    raw = (os.environ.get("FIREBASE_SERVICE_ACCOUNT") or "").strip()
+    if raw:
+        if raw[0] in "\"'" and raw[-1] == raw[0]:
+            raw = raw[1:-1]  # pasted with surrounding quotes
+        if not raw.lstrip().startswith("{"):
+            raw = base64.b64decode(raw).decode("utf-8")  # base64 form
+        info = json.loads(raw, strict=False)  # strict=False tolerates raw newlines inside the key
+    else:
+        key = os.path.join(BASE, "serviceAccountKey.json")
+        if not os.path.exists(key):
+            raise RuntimeError("Missing Firebase key: set FIREBASE_SERVICE_ACCOUNT (Vercel) or put serviceAccountKey.json next to app.py (local)")
+        info = json.load(open(key, encoding="utf-8"))
+    pk = info.get("private_key", "")
+    if "\\n" in pk:
+        pk = pk.replace("\\n", "\n")  # literal backslash-n -> real newline
+    info["private_key"] = pk.strip() + "\n"
+    return info
+
 def _session():
     """Created on first use, so a bad key shows up as a readable error instead of a crash."""
     if not _S:
         from google.oauth2 import service_account
         from google.auth.transport.requests import AuthorizedSession
-        raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT")  # full JSON string (use this on Vercel)
-        key = os.path.join(BASE, "serviceAccountKey.json")  # or a local file (use this in VS Code)
-        if raw:
-            info = json.loads(raw.strip())
-        elif os.path.exists(key):
-            info = json.load(open(key, encoding="utf-8"))
-        else:
-            raise RuntimeError("Missing Firebase key: put serviceAccountKey.json next to app.py or set FIREBASE_SERVICE_ACCOUNT")
+        info = _load_key()
         creds = service_account.Credentials.from_service_account_info(
             info, scopes=["https://www.googleapis.com/auth/datastore"])
         _S["project"] = info["project_id"]
+        _S["email"] = info.get("client_email", "")
         _S["root"] = f"https://firestore.googleapis.com/v1/projects/{info['project_id']}/databases/(default)/documents"
         _S["s"] = AuthorizedSession(creds, refresh_timeout=10)
     return _S
@@ -133,12 +144,8 @@ def clean_url(u):
     return ""
 
 def host_only(f):
-    @wraps(f)
-    def w(*a, **k):
-        if not session.get("host"):
-            return jsonify(error="login required"), 401
-        return f(*a, **k)
-    return w
+    """Login removed: the dashboard is open. Kept as a pass-through so routes stay the same."""
+    return f
 
 # ---------- errors: show the real reason to the host ----------
 @app.errorhandler(Exception)
@@ -147,22 +154,27 @@ def on_error(e):
     print("[aritztic] error:", repr(e))
     if not request.path.startswith("/api/"):
         return ("Not found" if code == 404 else "Server error. Check the Vercel logs."), code
-    msg = f"{type(e).__name__}: {e}" if session.get("host") else "Request failed"
+    msg = f"{type(e).__name__}: {e}"
     return jsonify(error=msg[:500]), code
 
 # ---------- diagnostics (safe: no secrets; you can delete this route later) ----------
 @app.get("/api/health")
 def health():
-    info = {"admin_password_env_set": "ADMIN_PASSWORD" in os.environ,
-            "secret_key_env_set": "SECRET_KEY" in os.environ,
-            "firebase_env_set": "FIREBASE_SERVICE_ACCOUNT" in os.environ}
+    info = {"firebase_env_set": "FIREBASE_SERVICE_ACCOUNT" in os.environ}
     try:
         t0 = time.time()
-        info["project_id"] = _session()["project"]
+        sess = _session()
+        info["project_id"] = sess["project"]
+        info["service_account"] = sess["email"]
         list_docs("projects", 1)
         info["firestore"] = f"ok ({int((time.time() - t0) * 1000)} ms)"
     except Exception as e:
-        info["firestore"] = f"{type(e).__name__}: {str(e)[:400]}"
+        msg = f"{type(e).__name__}: {str(e)[:400]}"
+        info["firestore"] = msg
+        if "invalid_grant" in msg:
+            info["fix"] = ("The service-account key was revoked/deleted or does not match. In Firebase console: "
+                           "Project settings > Service accounts > Generate new private key, then set the whole JSON "
+                           "as FIREBASE_SERVICE_ACCOUNT in Vercel and redeploy.")
     return jsonify(info)
 
 # ---------- pages ----------
@@ -173,25 +185,6 @@ def host_page():
 @app.get("/v/<token>")
 def view_page(token):
     return send_from_directory("static", "view.html")
-
-# ---------- host auth ----------
-@app.post("/api/login")
-def login():
-    given = str((request.get_json(silent=True) or {}).get("password", "")).strip()
-    if secrets.compare_digest(given.encode(), PASSWORD.encode()):  # bytes: works with any characters
-        session["host"] = True
-        return jsonify(ok=True)
-    return jsonify(error="wrong password"), 401
-
-@app.post("/api/logout")
-def logout():
-    session.clear()
-    return jsonify(ok=True)
-
-@app.get("/api/me")
-@host_only
-def me():
-    return jsonify(ok=True)
 
 # ---------- host: dashboard + projects ----------
 def read_project():
