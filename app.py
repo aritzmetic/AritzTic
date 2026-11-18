@@ -54,6 +54,8 @@ def _session():
             info, scopes=["https://www.googleapis.com/auth/datastore"])
         _S["project"] = info["project_id"]
         _S["email"] = info.get("client_email", "")
+        _S["key_id"] = (info.get("private_key_id") or "")[:6]
+        _S["source"] = "env FIREBASE_SERVICE_ACCOUNT" if os.environ.get("FIREBASE_SERVICE_ACCOUNT", "").strip() else "serviceAccountKey.json file"
         _S["root"] = f"https://firestore.googleapis.com/v1/projects/{info['project_id']}/databases/(default)/documents"
         _S["s"] = AuthorizedSession(creds, refresh_timeout=10)
     return _S
@@ -166,6 +168,8 @@ def health():
         sess = _session()
         info["project_id"] = sess["project"]
         info["service_account"] = sess["email"]
+        info["key_id_starts_with"] = sess["key_id"]
+        info["key_source"] = sess["source"]
         list_docs("projects", 1)
         info["firestore"] = f"ok ({int((time.time() - t0) * 1000)} ms)"
     except Exception as e:
